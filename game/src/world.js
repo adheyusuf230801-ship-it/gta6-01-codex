@@ -1,124 +1,43 @@
-// The game's rules and state, with no drawing and no browser in it: the player's paddle, the
-// pool of falling blocks and coins, spawning, collisions, score, lives and level. step() advances
-// one fixed step and returns what happened as bit flags, so the caller can react without the
-// world knowing about screens or sound. Nothing here allocates after createWorld returns.
-import { BLOCK, COIN, FIELD, LEVEL, LIVES, PLAYER, POOL_SIZE } from './config.js';
+import { CITY, TILE } from './config.js';
 
-export const KIND_BLOCK = 0;
-export const KIND_COIN = 1;
-
-export const EVENT_HIT = 1;
-export const EVENT_COIN = 2;
-export const EVENT_OVER = 4;
-
-function overlaps(a, b) {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+export function createCity(random) {
+  const buildings = [];
+  const parks = [];
+  const roads = [];
+  for (let y = 0; y < CITY.rows; y += 1) for (let x = 0; x < CITY.cols; x += 1) {
+    const bx = x * TILE, by = y * TILE;
+    roads.push({ x: bx, y: by, w: TILE, h: CITY.road });
+    roads.push({ x: bx, y: by, w: CITY.road, h: TILE });
+    if (y >= CITY.beachRow) continue;
+    if (x === 9 && y >= 5 || x === 3 && y === 4 || x === 7 && y === 2) {
+      parks.push({ x: bx + CITY.road, y: by + CITY.road, w: TILE - CITY.road, h: TILE - CITY.road });
+      continue;
+    }
+    const pad = 13 + random() * 13;
+    const width = TILE - CITY.road - pad * 2;
+    const height = TILE - CITY.road - pad * 2;
+    buildings.push({ x: bx + CITY.road + pad, y: by + CITY.road + pad, w: width, h: height, tone: Math.floor(random() * 4), seed: random() });
+  }
+  return { buildings, parks, roads, beachY: 8 * TILE, port: { x: 10 * TILE, y: 6 * TILE, w: 2 * TILE, h: 2 * TILE } };
 }
 
-export function createWorld(random) {
-  const player = { x: 0, y: FIELD.groundY - PLAYER.height, width: PLAYER.width, height: PLAYER.height, invulnerable: 0 };
-  const items = [];
-  for (let index = 0; index < POOL_SIZE; index += 1) {
-    items.push({ active: false, kind: KIND_BLOCK, x: 0, y: 0, width: 0, height: 0, speed: 0 });
-  }
-  const state = { player, items, score: 0, lives: LIVES, level: 1, elapsed: 0, blockTimer: 0, coinTimer: 0 };
+export function collidesBuilding(city, x, y, radius = 12) {
+  return city.buildings.some(b => x + radius > b.x && x - radius < b.x + b.w && y + radius > b.y && y - radius < b.y + b.h);
+}
 
-  function reset() {
-    player.x = (FIELD.width - player.width) / 2;
-    player.invulnerable = 0;
-    for (const item of items) item.active = false;
-    state.score = 0;
-    state.lives = LIVES;
-    state.level = 1;
-    state.elapsed = 0;
-    state.blockTimer = BLOCK.interval;
-    state.coinTimer = COIN.interval;
-  }
+export function inRoad(x, y) {
+  const lx = ((x % TILE) + TILE) % TILE, ly = ((y % TILE) + TILE) % TILE;
+  return lx < CITY.road || ly < CITY.road || y >= 8 * TILE;
+}
 
-  function freeItem() {
-    for (let index = 0; index < items.length; index += 1) if (!items[index].active) return items[index];
-    return null;
-  }
-
-  function spawnBlock() {
-    const item = freeItem();
-    if (item === null) return;
-    item.active = true;
-    item.kind = KIND_BLOCK;
-    item.width = BLOCK.minWidth + random() * (BLOCK.maxWidth - BLOCK.minWidth);
-    item.height = BLOCK.height;
-    item.x = random() * (FIELD.width - item.width);
-    item.y = -item.height;
-    item.speed = BLOCK.speed + BLOCK.speedPerLevel * (state.level - 1) + random() * BLOCK.speedJitter;
-  }
-
-  function spawnCoin() {
-    const item = freeItem();
-    if (item === null) return;
-    item.active = true;
-    item.kind = KIND_COIN;
-    item.width = COIN.size;
-    item.height = COIN.size;
-    item.x = random() * (FIELD.width - item.width);
-    item.y = -item.height;
-    item.speed = COIN.speed + COIN.speedPerLevel * (state.level - 1);
-  }
-
-  function blockInterval() {
-    return Math.max(BLOCK.minInterval, BLOCK.interval * BLOCK.intervalScale ** (state.level - 1));
-  }
-
-  /**
-   * One fixed step. `direction` is -1, 0 or 1 (left, still, right). With `harmless` set (the title
-   * screen's backdrop) things fall but nothing touches the player and nothing scores.
-   */
-  function step(dt, direction, harmless) {
-    let events = 0;
-    state.elapsed += dt;
-    state.level = Math.min(LEVEL.max, 1 + Math.floor(state.elapsed / LEVEL.seconds));
-
-    player.x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * dt));
-    if (player.invulnerable > 0) player.invulnerable = Math.max(0, player.invulnerable - dt);
-
-    state.blockTimer -= dt;
-    if (state.blockTimer <= 0) {
-      spawnBlock();
-      state.blockTimer += blockInterval();
-    }
-    state.coinTimer -= dt;
-    if (state.coinTimer <= 0) {
-      spawnCoin();
-      state.coinTimer += COIN.interval + random() * COIN.intervalJitter;
-    }
-
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      item.y += item.speed * dt;
-      if (item.y > FIELD.groundY) {
-        item.active = false;
-        if (item.kind === KIND_BLOCK && !harmless) state.score += BLOCK.dodgePoints;
-        continue;
-      }
-      if (harmless || !overlaps(item, player)) continue;
-      if (item.kind === KIND_COIN) {
-        item.active = false;
-        state.score += COIN.points;
-        events |= EVENT_COIN;
-      } else if (player.invulnerable === 0) {
-        item.active = false;
-        state.lives -= 1;
-        player.invulnerable = PLAYER.invulnerable;
-        events |= EVENT_HIT;
-        if (state.lives === 0) {
-          events |= EVENT_OVER;
-          break;
-        }
-      }
-    }
-    return events;
-  }
-
-  reset();
-  return { state, reset, step };
+export function createGameWorld(seed, rng) {
+  const random = rng;
+  const city = createCity(random);
+  const state = {
+    seed, city, random, player: { x: 5 * TILE + 85, y: 5 * TILE + 27, angle: 0, health: 100, cash: 350, ammo: 18, vehicle: null, invuln: 0 },
+    cars: [], peds: [], cops: [], footCops: [], bullets: [], particles: [], skids: [], targetCar: null, pickups: [{ x: 4 * TILE + 26, y: 3 * TILE + 27, type: 'pistol' }],
+    wanted: 0, wantedHeat: 0, mission: 0, missionStage: 0, missionTimer: 0, completed: 0, side: '', sideTimer: 0,
+    shake: 0, time: 0, events: [], taxiPin: null, rampage: 0,
+  };
+  return state;
 }

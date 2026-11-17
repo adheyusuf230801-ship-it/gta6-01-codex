@@ -1,141 +1,26 @@
-// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
-// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
-// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
-// rebuilt only when the number changes, so a frame allocates nothing.
-import { FIELD, FONT, LIVES, PALETTE } from './config.js';
-import { KIND_COIN } from './world.js';
-
-export const SCREEN_TITLE = 'title';
-export const SCREEN_PLAY = 'play';
-export const SCREEN_PAUSED = 'paused';
-export const SCREEN_OVER = 'over';
-
-/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
-const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
-const LIFE_SIZE = 20;
-const LIFE_GAP = 8;
-
-function cachedLabel(prefix) {
-  let value = -1;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
-    }
-    return text;
-  };
-}
-
-export function createRenderer(canvas) {
-  const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0 };
-  const scoreLabel = cachedLabel('Score ');
-  const levelLabel = cachedLabel('Level ');
-  const finalLabel = cachedLabel('Score ');
-  const bestLabel = cachedLabel('Best ');
-
-  function resize() {
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
-    view.x = (width - FIELD.width * view.scale) / 2;
-    view.y = (height - FIELD.height * view.scale) / 2;
-  }
-
-  const fonts = new Map();
-  function text(value, x, y, size, color, align) {
-    if (!fonts.has(size)) fonts.set(size, `${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    context.fillStyle = color;
-    context.textAlign = align;
-    context.fillText(value, x, y);
-  }
-
-  function drawField(state) {
-    context.fillStyle = PALETTE.sky;
-    context.fillRect(0, 0, FIELD.width, FIELD.height);
-    context.fillStyle = PALETTE.ground;
-    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
-
-    const items = state.items;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      if (item.kind === KIND_COIN) {
-        context.fillStyle = PALETTE.coin;
-        context.beginPath();
-        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = PALETTE.block;
-        context.fillRect(item.x, item.y, item.width, item.height);
-      }
-    }
-
-    const player = state.player;
-    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
-    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
-      context.fillStyle = PALETTE.player;
-      context.fillRect(player.x, player.y, player.width, player.height);
-    }
-  }
-
-  function drawHud(state) {
-    context.textBaseline = 'top';
-    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
-    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
-    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
-    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
-    for (let life = 0; life < LIVES; life += 1) {
-      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
-      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
-    }
-  }
-
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - height) / 2;
-    context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, height);
-    context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
-    for (let index = 0; index < lines.length; index += 1) {
-      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
-    }
-    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
-  }
-
-  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
-  const PAUSED_LINES = ['The blocks will wait for you.'];
-  const OVER_LINES = ['', ''];
-
-  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
-  function draw(state, screen, best) {
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = PALETTE.backdrop;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    drawField(state);
-    if (screen === SCREEN_TITLE) {
-      TITLE_LINES[2] = bestLabel(best);
-      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
-      return;
-    }
-    drawHud(state);
-    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
-    else if (screen === SCREEN_OVER) {
-      OVER_LINES[0] = finalLabel(state.score);
-      OVER_LINES[1] = bestLabel(best);
-      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
-    }
-  }
-
-  resize();
-  window.addEventListener('resize', resize);
-  return { draw };
-}
+import { COLORS, CITY, TILE } from './config.js';
+import { drawHud } from './hud.js';
+import { STORY } from './missions.js';
+export function createRenderer(canvas){const ctx=canvas.getContext('2d');const view={x:0,y:0,scale:1,w:1280,h:800};
+ function resize(){const d=window.devicePixelRatio||1;canvas.width=innerWidth*d;canvas.height=innerHeight*d;view.scale=Math.min(canvas.width/1280,canvas.height/800);view.w=canvas.width/view.scale;view.h=canvas.height/view.scale;}
+ function world(s){const p=s.player,shake=s.shake?Math.sin(s.time*53)*s.shake*10:0;view.x=Math.max(0,Math.min(CITY.width-view.w,p.x-view.w/2+shake));view.y=Math.max(0,Math.min(CITY.height-view.h,p.y-view.h/2));ctx.fillStyle=COLORS.grass;ctx.fillRect(0,0,CITY.width,CITY.height);
+   ctx.fillStyle=COLORS.water;ctx.fillRect(0,CITY.beachRow*TILE,CITY.width,CITY.height-CITY.beachRow*TILE);ctx.fillStyle=COLORS.sand;ctx.fillRect(0,CITY.beachRow*TILE-25,CITY.width,25);
+   for(const r of s.city.roads){ctx.fillStyle=COLORS.road;ctx.fillRect(r.x,r.y,r.w,r.h);ctx.strokeStyle='#d9c98666';ctx.setLineDash([12,13]);ctx.lineWidth=2;ctx.beginPath();if(r.w>r.h){ctx.moveTo(r.x,r.y+r.h/2);ctx.lineTo(r.x+r.w,r.y+r.h/2);}else{ctx.moveTo(r.x+r.w/2,r.y);ctx.lineTo(r.x+r.w/2,r.y+r.h);}ctx.stroke();ctx.setLineDash([]);}
+   for(const park of s.city.parks){ctx.fillStyle='#8da965';ctx.fillRect(park.x,park.y,park.w,park.h);ctx.fillStyle='#537d5c';for(let i=0;i<6;i++){ctx.beginPath();ctx.arc(park.x+30+(i%3)*48,park.y+30+Math.floor(i/3)*48,11,0,7);ctx.fill();}}
+   for(const b of s.city.buildings){ctx.fillStyle='#334042';ctx.fillRect(b.x+5,b.y+7,b.w,b.h);ctx.fillStyle=['#c97e64','#e1bc82','#91aaa0','#ae7181'][b.tone];ctx.fillRect(b.x,b.y,b.w,b.h);ctx.fillStyle='#f2d79e';ctx.fillRect(b.x+8,b.y+8,Math.min(16,b.w-12),5);}
+   const dock=s.city.port;ctx.fillStyle='#8c795b';ctx.fillRect(dock.x,dock.y,dock.w,dock.h);for(let i=0;i<4;i++){ctx.fillStyle=i%2?'#c4805e':'#d0aa70';ctx.fillRect(dock.x+16+i*42,dock.y+18,28,26);ctx.fillStyle='#6c5645';ctx.fillRect(dock.x+20+i*42,dock.y+48,20,10);}
+   for(const mark of s.skids){ctx.globalAlpha=Math.min(.42,mark.life*.12);ctx.strokeStyle='#19272a';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(mark.x,mark.y);ctx.lineTo(mark.x-Math.cos(mark.angle)*19,mark.y-Math.sin(mark.angle)*19);ctx.stroke();}ctx.globalAlpha=1;
+   for(const c of s.cars){ctx.save();ctx.translate(c.x,c.y);ctx.rotate(c.angle);ctx.fillStyle=c.kind==='police'?'#f2f3ed':c.color;ctx.fillRect(-19,-10,38,20);ctx.fillStyle=c.kind==='police'?'#202b32':'#9dc9c4';ctx.fillRect(-8,-8,15,16);if(c.kind==='police'){ctx.fillStyle='#202b32';ctx.fillRect(-19,-10,38,3);ctx.fillStyle=Math.floor(s.time*8)%2?'#f44950':'#387dff';ctx.fillRect(-6,-13,12,4);ctx.strokeStyle='#111a1d';ctx.lineWidth=2;ctx.strokeRect(-19,-10,38,20);}ctx.restore();}
+   for(const c of s.footCops)if(c.health>0){ctx.fillStyle='#435f9e';ctx.beginPath();ctx.arc(c.x,c.y,7,0,7);ctx.fill();ctx.fillStyle='#f7f0d9';ctx.fillRect(c.x-2,c.y-3,4,6);}
+   for(const ped of s.peds)if(ped.alive){ctx.fillStyle=ped.color;ctx.beginPath();ctx.arc(ped.x,ped.y,5,0,7);ctx.fill();}
+   if(s.mission<STORY.length){const marker=STORY[s.mission],visible=marker.x>=view.x+22&&marker.x<=view.x+view.w-22&&marker.y>=view.y+22&&marker.y<=view.y+view.h-22;ctx.save();ctx.translate(marker.x,marker.y);ctx.fillStyle='#172b2d';ctx.beginPath();ctx.arc(0,0,27,0,Math.PI*2);ctx.fill();ctx.strokeStyle=COLORS.gold;ctx.lineWidth=5;ctx.beginPath();ctx.arc(0,0,22+Math.sin(s.time*4)*3,0,Math.PI*2);ctx.stroke();ctx.fillStyle=COLORS.gold;ctx.beginPath();ctx.moveTo(0,-23);ctx.lineTo(14,-6);ctx.lineTo(7,-6);ctx.lineTo(7,17);ctx.lineTo(-7,17);ctx.lineTo(-7,-6);ctx.lineTo(-14,-6);ctx.closePath();ctx.fill();ctx.fillStyle='#172b2d';ctx.font='bold 14px system-ui';ctx.textAlign='center';ctx.fillText('!',0,7);ctx.restore();if(!visible){const dx=marker.x-(view.x+view.w/2),dy=marker.y-(view.y+view.h/2),scale=Math.min((view.w/2-34)/Math.max(1,Math.abs(dx)),(view.h/2-42)/Math.max(1,Math.abs(dy))),ax=view.x+view.w/2+dx*scale,ay=view.y+view.h/2+dy*scale;ctx.save();ctx.translate(ax,ay);ctx.rotate(Math.atan2(dy,dx)+Math.PI/2);ctx.fillStyle=COLORS.gold;ctx.strokeStyle='#172b2d';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(0,-16);ctx.lineTo(12,12);ctx.lineTo(0,6);ctx.lineTo(-12,12);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();}}
+   if(s.taxiPin){ctx.strokeStyle=COLORS.gold;ctx.lineWidth=3;ctx.beginPath();ctx.arc(s.taxiPin.x,s.taxiPin.y,24+Math.sin(s.time*4)*2,0,7);ctx.stroke();}
+   for(const pickup of s.pickups)if(!pickup.taken){ctx.fillStyle='#ffe08c';ctx.fillRect(pickup.x-7,pickup.y-7,14,14);ctx.fillStyle='#243b3f';ctx.font='10px system-ui';ctx.textAlign='center';ctx.fillText('P',pickup.x,pickup.y+4);}
+   for(const b of s.bullets){ctx.fillStyle='#ffe08c';ctx.beginPath();ctx.arc(b.x,b.y,3,0,7);ctx.fill();}
+   for(const q of s.particles){ctx.globalAlpha=Math.max(0,q.life*3);ctx.fillStyle=q.color;ctx.beginPath();ctx.arc(q.x,q.y,4,0,7);ctx.fill();ctx.globalAlpha=1;}
+   ctx.fillStyle=`rgba(255,188,112,${.025+.025*(.5+.5*Math.sin(s.time/90))})`;ctx.fillRect(view.x,view.y,view.w,view.h);
+   {const p=s.player;ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.angle);ctx.strokeStyle='#f7f0d9';ctx.lineWidth=4;ctx.beginPath();ctx.arc(0,0,p.vehicle?28:15,0,Math.PI*2);ctx.stroke();ctx.fillStyle='#22f0d0';ctx.beginPath();ctx.arc(0,0,p.vehicle?8:10,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#102328';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='#fff';ctx.beginPath();ctx.moveTo(0,p.vehicle?-25:-11);ctx.lineTo(6,p.vehicle?-10:-1);ctx.lineTo(-6,p.vehicle?-10:-1);ctx.closePath();ctx.fill();ctx.restore();}
+ }
+ function draw(s,screen,best=0){ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#14252a';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.setTransform(view.scale,0,0,view.scale,0,0);ctx.save();ctx.translate(-view.x,-view.y);world(s);ctx.restore();if(screen==='playing')drawHud(ctx,s,view.w,view.h,screen);if(screen!=='playing'){ctx.fillStyle='#0d1a20aa';ctx.fillRect(0,0,view.w,view.h);ctx.textAlign='center';ctx.fillStyle=COLORS.white;ctx.font='bold 50px system-ui';ctx.fillText(screen==='title'?'SOLARA BAY':screen==='paused'?'PAUSED':screen==='gameover'?'BUSTED':'',view.w/2,view.h/2-82);ctx.font='16px system-ui';ctx.fillStyle=COLORS.gold;if(screen==='title'){ctx.fillText('A sunlit city. A long night.',view.w/2,view.h/2-42);ctx.fillStyle=COLORS.white;ctx.fillText('WASD move / drive  |  Shift sprint  |  E enter / exit',view.w/2,view.h/2+2);ctx.fillText('Mouse / Space attack  |  F punch  |  T taxi  |  R rampage',view.w/2,view.h/2+28);ctx.fillText('Click or press Enter to begin',view.w/2,view.h/2+76);}else ctx.fillText(screen==='paused'?'Press P or Esc to return.':screen==='gameover'?`Cash $${s.player.cash}  |  best $${best}  |  press Enter to restart.`:'',view.w/2,view.h/2+8);}
+ }
+ resize();window.addEventListener('resize',resize);return{draw,view};}
